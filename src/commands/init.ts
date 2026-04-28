@@ -1,0 +1,250 @@
+import fs from "fs";
+import path from "path";
+import readline from "readline";
+import { execFileSync } from "child_process";
+import { scaffoldVault } from "../vault";
+import { resolveVaultPath, Config, Mode, Tool, SecurityLevel, SECURITY_PRESETS } from "../config";
+import { commandFiles } from "./templates";
+
+const TOOL_PATHS: Record<Tool, string> = {
+  claude: ".claude/commands",
+  opencode: ".opencode/commands",
+};
+
+function safeProjectPath(cwd: string, userPath: string): string {
+  const root = path.resolve(cwd);
+  const sanitized = userPath.split(path.sep).filter((s) => s !== ".." && s !== "").join(path.sep);
+  const resolved = path.resolve(root, sanitized);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error(`Path traversal blocked: "${sanitizeLog(userPath)}" escapes the project root.`);
+  }
+  return resolved;
+}
+
+function safePackagePath(base: string, relative: string): string {
+  const root = path.resolve(base);
+  const sanitized = relative.split(path.sep).filter((s) => s !== ".." && s !== "").join(path.sep);
+  const resolved = path.resolve(root, sanitized);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error(`Path traversal blocked: "${sanitizeLog(relative)}" escapes the package root.`);
+  }
+  return resolved;
+}
+
+function detectTool(): Tool | null {
+  for (const bin of ["claude", "opencode"]) {
+    try { execFileSync("which", [bin], { stdio: "pipe" }); return bin as Tool; } catch { /* not found */ }
+  }
+  return null;
+}
+
+function updateGitignore(cwd: string, entries: string[]): void {
+  const giPath = safeProjectPath(cwd, ".gitignore");
+  const existing = fs.existsSync(giPath) ? fs.readFileSync(giPath, "utf8") : "";
+  const toAdd = entries
+    .map((e) => { try { return path.relative(cwd, safeProjectPath(cwd, e)); } catch { return null; } })
+    .filter((e): e is string => !!e && !existing.includes(e));
+  if (toAdd.length) fs.appendFileSync(giPath, "\n# wiki4llm\n" + toAdd.map((e) => e.replace(/[\r\n]/g, "")).join("\n") + "\n", "utf8");
+}
+
+function hasBareApiKeys(cfg: Config): boolean {
+  if (!cfg.apiKeys) return false;
+  return Object.values(cfg.apiKeys).some((v) => v && !v.startsWith("$"));
+}
+
+function sanitizeLog(s: string): string {
+  return s.replace(/[\r\n]/g, " ");
+}
+
+export async function wikiInit(cwd = process.cwd()): Promise<void> {
+  const cfgPath = safeProjectPath(cwd, ".wiki4llm.json");
+
+  if (fs.existsSync(cfgPath)) {
+    const existing: Config = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string, def: string) =>
+      new Promise<string>((res) => rl.question(`${q} [${def}]: `, (a) => res(a.trim() || def)));
+
+    console.log("\nModes:\n  context — you drive the loop\n  harness — autonomous multi-agent loop (slash-commands)\n  run     — fully autonomous CrewAI harness; set it and forget it");
+    const modeInput = await ask("Mode (context/harness/run)", existing.mode);
+    const mode: Mode = modeInput === "harness" ? "harness" : modeInput === "run" ? "run" : "context";
+
+    let tool: Tool = existing.tool ?? "claude";
+    if (mode !== "run") {
+      const detected = detectTool();
+      if (!detected) {
+        console.log("wiki4llm: no supported LLM CLI tool detected (claude, opencode).");
+        const choice = await ask("Choose tool to generate commands for (claude/opencode)", tool);
+        tool = (choice === "opencode" ? "opencode" : "claude") as Tool;
+      } else {
+        tool = detected;
+      }
+    }
+
+    console.log("\nSecurity levels:\n  open     — no restrictions (default)\n  standard — git/npm shell only, no path traversal, warn on bare API keys\n  strict   — shell disabled, no path traversal, error on bare API keys");
+    const secInput = await ask("Security level (open/standard/strict)", existing.security?.level ?? "open");
+    const secLevel: SecurityLevel = ["standard", "strict"].includes(secInput) ? secInput as SecurityLevel : "open";
+
+    rl.close();
+
+    const updated: Config = { ...existing, mode, tool,
+      security: SECURITY_PRESETS[secLevel],
+      ...(mode === "run" && existing.crewai && {
+        crewai: {
+          ...existing.crewai,
+          harnessScript: safePackagePath(path.resolve(__dirname, "../../harness"), "main.py"),
+          },
+        }),
+      };
+
+    if (secLevel !== "open" && hasBareApiKeys(updated)) {
+      const label = secLevel === "strict" ? "ERROR" : "WARN";
+      console.warn(`wiki4llm [${label}]: bare API keys found in .wiki4llm.json. Use "$ENV_VAR" references instead.`);
+      if (secLevel === "strict") { process.exit(1); }
+    }
+    fs.writeFileSync(cfgPath, JSON.stringify(updated, null, 2), "utf8");
+    console.log(`wiki4llm: updated .wiki4llm.json (mode=${sanitizeLog(mode)}, security=${sanitizeLog(secLevel)})`);
+
+    if (mode !== "run") {
+      const resolved = resolveVaultPath(updated, cwd);
+      const commandDir = safeProjectPath(cwd, TOOL_PATHS[tool]);
+      fs.mkdirSync(commandDir, { recursive: true });
+      const files = commandFiles(updated, resolved);
+      for (const [filename, content] of Object.entries(files)) {
+        fs.writeFileSync(safeProjectPath(commandDir, path.basename(filename)), content, "utf8");
+      }
+      updateGitignore(cwd, [TOOL_PATHS[tool], ".env"]);
+      console.log(`wiki4llm: regenerated ${Object.keys(files).length} slash-command files at ${TOOL_PATHS[tool]}/`);
+      console.log(`\nDone. Open ${tool === "claude" ? "Claude Code" : "OpenCode"} in this project and run /wiki-map to get started.`);
+    } else {
+      if (!existing.vault.external) updateGitignore(cwd, [".wiki", ".wiki4llm.json", ".env"]);
+      console.log(`\nwiki4llm: Run Mode updated. Harness script refreshed.\nRun: wiki4llm install-deps && wiki4llm run`);
+    }
+    return;
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string, def: string) =>
+    new Promise<string>((res) => rl.question(`${q} [${def}]: `, (a) => res(a.trim() || def)));
+
+  const name = sanitizeLog(await ask("Project name", path.basename(cwd)));
+  const vaultPathInput = await ask("Vault path", "./.wiki");
+  const external = (await ask("Use external vault (~/.wiki4llm/vaults/)? (y/n)", "n")) === "y";
+  const vaultPath = external
+    ? (() => {
+        const vaultsBase = path.resolve(process.env.HOME ?? "/tmp", ".wiki4llm", "vaults");
+        const resolved = path.resolve(vaultsBase, path.basename(name));
+        if (!resolved.startsWith(vaultsBase + path.sep) && resolved !== vaultsBase) {
+          throw new Error(`Path traversal blocked: vault name "${sanitizeLog(name)}" escapes the vaults directory.`);
+        }
+        return resolved;
+      })()
+    : safeProjectPath(cwd, vaultPathInput);
+
+  // Mode selection
+  console.log("\nModes:\n  context — you drive the loop (default)\n  harness — autonomous multi-agent loop (slash-commands)\n  run     — fully autonomous CrewAI harness; set it and forget it");
+  const modeInput = await ask("Mode (context/harness/run)", "context");
+  const mode: Mode = modeInput === "harness" ? "harness" : modeInput === "run" ? "run" : "context";
+
+  console.log("\nSecurity levels:\n  open     — no restrictions (default)\n  standard — git/npm shell only, no path traversal, warn on bare API keys\n  strict   — shell disabled, no path traversal, error on bare API keys");
+  const secInput = await ask("Security level (open/standard/strict)", "open");
+  const secLevel: SecurityLevel = ["standard", "strict"].includes(secInput) ? secInput as SecurityLevel : "open";
+
+  // Tool detection (not needed for Run Mode)
+  let tool: Tool = "claude";
+  if (mode !== "run") {
+    const detected = detectTool();
+    if (!detected) {
+      console.log("wiki4llm: no supported LLM CLI tool detected (claude, opencode).");
+      const choice = await ask("Choose tool to generate commands for (claude/opencode)", "claude");
+      tool = (choice === "opencode" ? "opencode" : "claude") as Tool;
+    } else {
+      console.log(`wiki4llm: detected ${sanitizeLog(detected)}`);
+      tool = detected;
+    }
+  }
+
+  rl.close();
+
+  if (mode === "run") {
+    const harnessDir = path.resolve(__dirname, "../../harness");
+    const harnessScript = safePackagePath(harnessDir, "main.py");
+    const cfg = {
+      mode,
+      tool,
+      vault: { path: vaultPath, name, git: true, sync: false, external },
+      project: { name, ignore: ["node_modules", "dist", ".git"], specsDir: "specs" },
+      harness: { maxIterations: 3, noBlock: false, agents: ["architect", "builder", "mapper", "lint"] },
+      crewai: {
+        model: { default: "ollama/qwen2.5-coder:32b" },
+        maxFeatures: null,
+        interactive: false,
+        verifierRetries: 2,
+        pythonPath: "python3",
+        harnessScript,
+      },
+      security: SECURITY_PRESETS[secLevel],
+    };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+    console.log(`wiki4llm: wrote .wiki4llm.json (security=${sanitizeLog(secLevel)})`);
+
+    const resolved = resolveVaultPath(cfg as Config, cwd);
+    scaffoldVault(resolved, cfg.vault.git);
+    console.log(`wiki4llm: vault scaffolded at ${sanitizeLog(path.relative(cwd, resolved))}`);
+
+    if (!/^[\w][\w./\-]*$/.test(cfg.project.specsDir)) {
+      throw new Error(`Invalid specsDir: "${sanitizeLog(cfg.project.specsDir)}".`);
+    }
+    const specsDir = safeProjectPath(cwd, cfg.project.specsDir);
+    if (!fs.existsSync(specsDir)) {
+      fs.mkdirSync(specsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(specsDir, "README.md"),
+        "# Specs\n\nAdd spec files here. wiki4llm will read them to build the feature plan.\n",
+        "utf8"
+      );
+    }
+
+    if (!external) updateGitignore(cwd, [".wiki", ".wiki4llm.json", ".env"]);
+    console.log("\nwiki4llm: Run Mode initialized.\n\nNext steps:\n  1. Add spec files to specs/\n  2. wiki4llm install-deps\n  3. wiki4llm run");
+    return;
+  }
+
+  const cfg: Config = {
+    mode,
+    tool,
+    vault: { path: vaultPath, name, git: true, sync: false, external },
+    project: { name, ignore: ["node_modules", "dist", ".git"], specsDir: "specs" },
+    harness: { maxIterations: 3, noBlock: false, agents: ["architect", "builder", "mapper", "lint"] },
+    security: SECURITY_PRESETS[secLevel],
+  };
+
+  // Write config
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+  console.log(`wiki4llm: wrote .wiki4llm.json (security=${sanitizeLog(secLevel)})`);
+
+  // Scaffold vault
+  const resolved = resolveVaultPath(cfg, cwd);
+  scaffoldVault(resolved, cfg.vault.git);
+  console.log(`wiki4llm: vault scaffolded at ${sanitizeLog(path.relative(cwd, resolved))}`);
+
+  // Generate slash-command files
+
+  const commandDir = safeProjectPath(cwd, TOOL_PATHS[tool]);
+  fs.mkdirSync(commandDir, { recursive: true });
+
+  const files = commandFiles(cfg, resolved);
+  for (const [filename, content] of Object.entries(files)) {
+    fs.writeFileSync(safeProjectPath(commandDir, path.basename(filename)), content, "utf8");
+  }
+  console.log(`wiki4llm: generated ${Object.keys(files).length} slash-command files at ${TOOL_PATHS[tool]}/`);
+
+  // Gitignore the command directory + local vault files (skip if external/shared)
+  const gitignoreEntries = [TOOL_PATHS[tool], ".env"];
+  if (!external) gitignoreEntries.push(".wiki", ".wiki4llm.json");
+  updateGitignore(cwd, gitignoreEntries);
+  console.log(`wiki4llm: added ${gitignoreEntries.join(", ")} to .gitignore`);
+
+  console.log(`\nDone. Open ${tool === "claude" ? "Claude Code" : "OpenCode"} in this project and run /wiki-map to get started.`);
+}

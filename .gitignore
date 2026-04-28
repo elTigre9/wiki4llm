@@ -1,0 +1,27 @@
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+harness/.venv/
+harness/venv/
+*.egg-info/
+
+# Secrets
+.env
+.wiki4llm.json
+
+# Vault (per-project; teammates generate their own)
+.wiki/
+
+# Generated LLM CLI command dirs
+.claude/commands/
+.opencode/commands/
+
+# IDE / AI tooling
+.amazonq/
+
+# OS
+.DS_Store

@@ -1,0 +1,64 @@
+{
+  "vault": {
+    "path": "./.wiki",
+    "name": "my-project",
+    "git": true,
+    "sync": true,
+    "external": false
+  },
+  "project": {
+    "name": "my-project",
+    "ignore": ["node_modules", "dist", ".git"],
+    "specsDir": "specs"
+  },
+  "harness": {
+    "maxIterations": 3,
+    "noBlock": false,
+    "agents": ["architect", "builder", "mapper", "lint"]
+  },
+  "crewai": {
+    "model": {
+      "default": "ollama/qwen2.5-coder:32b",
+      "agents": {
+        "planner":   "ollama/qwen2.5-coder:32b",
+        "research":  "openai/gpt-4o",
+        "refiner":   "openai/gpt-4o",
+        "architect": "ollama/qwen2.5-coder:32b",
+        "builder":   "ollama/qwen2.5-coder:32b",
+        "verifier":  "ollama/qwen2.5-coder:32b",
+        "mapper":    "anthropic/claude-sonnet-4-5"
+      }
+    },
+    "maxFeatures": null,
+    "interactive": false,
+    "verifierRetries": 2,
+    "agentTimeout": 900,
+    "pythonPath": "python3",
+    "harnessScript": "harness/main.py"
+  },
+  "research": {
+    "enabled": false,
+    "type": "ux",
+    "prompt": ""
+  },
+  "apiKeys": {
+    "openai":    "$OPENAI_API_KEY",
+    "anthropic": "sk-ant-...",
+    "gemini":    "$GEMINI_API_KEY",
+    "groq":      "$GROQ_API_KEY"
+  },
+  "security": {
+    "level": "open",
+    "shell": {
+      "allow": true,
+      "allowedCommands": [],
+      "blockedPatterns": []
+    },
+    "vault": {
+      "allowPathTraversal": true
+    },
+    "apiKeys": {
+      "requireEnvRefs": false
+    }
+  }
+}

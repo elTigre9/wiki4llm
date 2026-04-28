@@ -1,0 +1,20 @@
+{
+  "name": "wiki4llm",
+  "version": "0.1.0",
+  "description": "Map codebases into an Obsidian vault for persistent LLM context",
+  "bin": { "wiki4llm": "./dist/cli.js" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "fast-glob": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.2"
+  }
+}
