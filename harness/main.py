@@ -35,7 +35,10 @@ def main():
     print(f"  Vault:   {config.vault_path}")
     print(f"  Specs:   {config.specs_dir}")
     print(f"  Model:   {config.default_model}")
-    agents = ["planner"]
+    agents = []
+    if not config.skip_clarify:
+        agents.append("clarifier")
+    agents.append("planner")
     if config.research.enabled:
         agents.append("research")
     if not config.no_refine:

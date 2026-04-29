@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from config import HarnessConfig
 from agents import make_agents, context_percent
-from tasks import make_tasks
+from tasks import make_tasks, make_clarifier_task
 from ui import agent_spinner, print_over_spinner
 from vault import (
     next_unchecked_feature,
@@ -41,6 +41,95 @@ def validate_vault(vault_path: str):
     root = Path(vault_path).resolve()
     for d in ["raw/assets", "map", "entities", "decisions", "pending", "research"]:
         (root / d).mkdir(parents=True, exist_ok=True)
+
+
+def _clarifications_done(vault_path: str) -> bool:
+    p = Path(vault_path) / "raw" / "clarifications.md"
+    return p.exists() and "status: needs-answers" not in p.read_text()
+
+
+def _clarifications_need_answers(vault_path: str) -> bool:
+    p = Path(vault_path) / "raw" / "clarifications.md"
+    return p.exists() and "status: needs-answers" in p.read_text()
+
+
+def _extract_questions(vault_path: str) -> list[str]:
+    p = Path(vault_path) / "raw" / "clarifications.md"
+    if not p.exists():
+        return []
+    lines = p.read_text().splitlines()
+    in_questions = False
+    questions = []
+    for line in lines:
+        if line.strip() == "## Questions":
+            in_questions = True
+            continue
+        if in_questions and line.startswith("## "):
+            break
+        if in_questions and re.match(r"^\d+\.", line.strip()):
+            questions.append(line.strip())
+    return questions
+
+
+def _write_answers(vault_path: str, answers: list[str]) -> None:
+    p = Path(vault_path) / "raw" / "clarifications.md"
+    text = p.read_text()
+    answers_block = "## Answers\n\n" + "\n".join(
+        f"{i + 1}. {a}" for i, a in enumerate(answers)
+    ) + "\n"
+    text = re.sub(r"## Answers\n\n\(to be filled in by the user\)", answers_block, text)
+    text = text.replace("status: needs-answers", "status: answered")
+    p.write_text(text)
+
+
+def run_spec_clarifier(agents: dict, config: HarnessConfig) -> int:
+    """One-time pre-flight: LLM reads specs, surfaces questions, user answers, vault records them."""
+    if _clarifications_done(config.vault_path):
+        if config.verbose:
+            print("[clarifier] skipped — raw/clarifications.md already complete")
+        return 0
+
+    clarifier_task = make_clarifier_task(agents, config, config.specs_dir)
+
+    try:
+        with agent_spinner("clarifier", config.verbose, model=config.model_for("clarifier"),
+                           trace=config.trace, vault_path=config.vault_path, slug="__clarify__") as stats:
+            result = run_with_retry(agents, {"clarifier": clarifier_task}, "clarifier", config,
+                                    "__clarify__", pause_event=stats.get("pause_event"))
+            stats["usage"] = getattr(result, "token_usage", None)
+            stats["ctx_pct"] = context_percent(config.model_for("clarifier"), stats["usage"])
+    except HarnessError as e:
+        print(f"wiki4llm: clarifier failed: {e}")
+        return 1
+
+    if not _clarifications_need_answers(config.vault_path):
+        # LLM found no ambiguities — proceed
+        append_log(config.vault_path, "clarifier", "__clarify__", "Specs reviewed — no ambiguities found.")
+        return 0
+
+    # Present questions to the user
+    questions = _extract_questions(config.vault_path)
+    if not questions:
+        append_log(config.vault_path, "clarifier", "__clarify__", "Specs reviewed — no questions extracted.")
+        return 0
+
+    print("\n" + "─" * 60)
+    print("wiki4llm: The Clarifier found ambiguities in your specs.")
+    print("Answer each question (press Enter to skip and let agents infer):")
+    print("─" * 60 + "\n")
+
+    answers = []
+    for q in questions:
+        print(f"  {q}")
+        answer = input("  > ").strip()
+        answers.append(answer if answer else "(no answer — agents should infer from context)")
+        print()
+
+    _write_answers(config.vault_path, answers)
+    append_log(config.vault_path, "clarifier", "__clarify__",
+               f"Specs reviewed. {len(questions)} question(s) answered by user. See raw/clarifications.md.")
+    print("wiki4llm: Answers recorded. Continuing...\n")
+    return 0
     for fname, content in [
         ("index.md", "# Index\n\n"),
         ("log.md", "# Log\n\n"),
@@ -271,6 +360,12 @@ def run_loop(config: HarnessConfig) -> int:
     agents = make_agents(config)
 
     # Planner runs only if plan.md is missing or has no unchecked features yet
+    # Spec clarifier — runs once before the Planner, skipped if --skip-clarify or already done
+    if not config.skip_clarify and not config.dry_run:
+        rc = run_spec_clarifier(agents, config)
+        if rc != 0:
+            return rc
+
     plan_needs_init = (
         not plan_path.exists()
         or next_unchecked_feature(str(plan_path)) is None
@@ -325,6 +420,8 @@ def run_loop(config: HarnessConfig) -> int:
 
         slug, description = feature
         slug = _sanitize_slug(slug)
+        # Ensure raw/<slug>/ exists for TECH.md
+        (Path(config.vault_path) / "raw" / slug).mkdir(parents=True, exist_ok=True)
         tasks = make_tasks(agents, config, (slug, description))
 
         try:

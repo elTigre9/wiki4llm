@@ -93,6 +93,7 @@ class HarnessConfig:
     interactive: bool
     no_refine: bool
     no_verify: bool
+    skip_clarify: bool
     dry_run: bool
     verbose: bool
     trace: bool
@@ -138,6 +139,7 @@ class HarnessConfig:
             interactive=crewai.get("interactive", False),
             no_refine=run_cfg.get("noRefine", False),
             no_verify=run_cfg.get("noVerify", False),
+            skip_clarify=run_cfg.get("skipClarify", False),
             dry_run=run_cfg.get("dryRun", False),
             verbose=run_cfg.get("verbose", False),
             trace=run_cfg.get("trace", False),

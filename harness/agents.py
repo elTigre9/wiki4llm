@@ -155,20 +155,19 @@ def make_agents(config: HarnessConfig) -> dict:
     shell = ShellTool(security=sec)
     web_search = WebSearchTool(security=sec)
 
-    agents = {"research": Agent(
-        role="Research Analyst",
-        goal="Gather targeted research relevant to the feature and write a concise findings report",
-        backstory="You surface trends, patterns, and prior art so the team builds on solid ground.",
-        llm=llm("research"),
-        tools=[*vault_rw, web_search],
-        allow_delegation=False,
-        verbose=config.verbose,
-    )} if config.research.enabled else {}
-
-    agents.update({
+    agents = {
+        "clarifier": Agent(
+            role="Spec Clarifier",
+            goal="Read spec files, identify ambiguities that would block a CrewAI agent, and write an enriched clarifications document",
+            backstory="You surface gaps and contradictions in specs before any code is written, so agents never have to guess.",
+            llm=llm("clarifier"),
+            tools=[*vault_rw, shell],
+            allow_delegation=False,
+            verbose=config.verbose,
+        ),
         "planner": Agent(
             role="Project Planner",
-            goal="Parse spec files and produce a complete, ordered feature checklist",
+            goal="Parse spec files and produce a complete, ordered feature checklist with numbered acceptance criteria",
             backstory="You extract structured plans from unstructured specs.",
             llm=llm("planner"),
             tools=[*vault_rw, shell],
@@ -186,7 +185,7 @@ def make_agents(config: HarnessConfig) -> dict:
         ),
         "architect": Agent(
             role="Software Architect",
-            goal="Produce a concrete, file-level implementation plan",
+            goal="Produce a concrete, file-level implementation plan and a TECH.md spec",
             backstory="You translate decisions into actionable engineering plans.",
             llm=llm("architect"),
             tools=vault_rw,
@@ -205,7 +204,7 @@ def make_agents(config: HarnessConfig) -> dict:
         ),
         "verifier": Agent(
             role="Test Verifier",
-            goal="Run the test suite, analyze failures, and write a structured failure report",
+            goal="Run the test suite, analyze failures against acceptance criteria, and write a structured failure report",
             backstory="You catch regressions early by running tests and distilling failures into actionable notes.",
             llm=llm("verifier"),
             tools=[*vault_rw, shell],
@@ -215,12 +214,24 @@ def make_agents(config: HarnessConfig) -> dict:
         ),
         "mapper": Agent(
             role="Vault Mapper",
-            goal="Update the vault to accurately reflect what was just built",
+            goal="Update the vault and TECH.md to accurately reflect what was just built",
             backstory="You keep the knowledge base current so future agents start informed.",
             llm=llm("mapper"),
             tools=[*vault_rw, shell],
             allow_delegation=False,
             verbose=config.verbose,
         ),
-    })
+    }
+
+    if config.research.enabled:
+        agents["research"] = Agent(
+            role="Research Analyst",
+            goal="Gather targeted research relevant to the feature and write a concise findings report",
+            backstory="You surface trends, patterns, and prior art so the team builds on solid ground.",
+            llm=llm("research"),
+            tools=[*vault_rw, web_search],
+            allow_delegation=False,
+            verbose=config.verbose,
+        )
+
     return agents

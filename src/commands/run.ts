@@ -11,6 +11,7 @@ interface RunOptions {
   interactive?: boolean;
   noRefine?: boolean;
   noVerify?: boolean;
+  skipClarify?: boolean;
   research?: string;
   researchPrompt?: string;
   dryRun?: boolean;
@@ -72,6 +73,7 @@ function buildMergedConfig(config: any, opts: RunOptions): object {
       specsDir: opts.specs ?? config.project.specsDir ?? "specs",
       noRefine: opts.noRefine ?? false,
       noVerify: opts.noVerify ?? false,
+      skipClarify: opts.skipClarify ?? false,
       dryRun: opts.dryRun ?? false,
       verbose: opts.verbose ?? false,
       trace: opts.trace ?? false,

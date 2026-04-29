@@ -212,14 +212,19 @@ wiki4llm run
 The loop runs until `pending/plan.md` is fully checked off:
 
 ```
-[Planner]    reads specs/, writes pending/plan.md + overview.md
+[Clarifier]  reads specs/, surfaces ambiguities, asks user for answers (once only)
+[Planner]    reads specs/ + clarifications, writes pending/plan.md + overview.md
+```
+
+```
+[Planner]    reads specs/, writes pending/plan.md + overview.md (with numbered acceptance criteria per feature)
 [Research]   (optional) researches trends/patterns, writes research/<slug>.md
 [Refiner]    evaluates 3 approaches, writes decisions/<slug>.md
-[Architect]  writes pending/plan-<slug>.md
+[Architect]  writes pending/plan-<slug>.md and raw/<slug>/TECH.md (living spec)
 [Builder]    implements feature, commits, writes pending/questions.md
-[Verifier]   runs test suite, writes pending/verify-<slug>.md
+[Verifier]   runs test suite, maps failures to acceptance criteria, writes pending/verify-<slug>.md
              → if tests fail, Builder retries (up to verifierRetries times)
-[Mapper]     updates vault, checks off feature in pending/plan.md
+[Mapper]     updates vault, fills raw/<slug>/TECH.md deviations, checks off feature in pending/plan.md
              → repeat for next feature
 ```
 
@@ -229,6 +234,7 @@ The loop runs until `pending/plan.md` is fully checked off:
 wiki4llm run --dry-run              # print feature list, don't build
 wiki4llm run --no-refine            # skip Refiner (faster, less deliberate)
 wiki4llm run --no-verify            # skip Verifier (no test feedback loop)
+wiki4llm run --skip-clarify         # skip the one-time spec clarification pass
 wiki4llm run --research ux          # enable Research agent (types: ux, web, accessibility, performance, competitor, security)
 wiki4llm run --research web --research-prompt "focus on React 19 patterns"  # with sub-prompt
 wiki4llm run --interactive          # pause after Builder for human review
@@ -275,6 +281,7 @@ If the loop crashes mid-feature, re-run `wiki4llm run`. Each agent checks whethe
 
 | Agent | Skipped if |
 |---|---|
+| Clarifier | `raw/clarifications.md` exists and `status` is not `needs-answers` |
 | Planner | Never — always merges |
 | Research | `research/<slug>.md` exists and contains `## Findings` |
 | Refiner | `decisions/<slug>.md` exists and is valid |
@@ -408,6 +415,7 @@ wiki4llm run [options]
   --interactive        Pause at human checkpoints
   --no-refine          Skip the Refiner agent
   --no-verify          Skip the Verifier agent (no test feedback loop)
+  --skip-clarify       Skip the one-time spec clarification pass
   --research <type>    Enable Research agent (ux|web|accessibility|performance|competitor|security)
   --research-prompt    Sub-prompt appended to the Research agent's instructions
   --dry-run            Print the plan without executing agents
