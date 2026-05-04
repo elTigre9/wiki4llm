@@ -45,7 +45,8 @@
     "openai":    "$OPENAI_API_KEY",
     "anthropic": "sk-ant-...",
     "gemini":    "$GEMINI_API_KEY",
-    "groq":      "$GROQ_API_KEY"
+    "groq":      "$GROQ_API_KEY",
+    "tavily":    "$TAVILY_API_KEY"
   },
   "security": {
     "level": "open",

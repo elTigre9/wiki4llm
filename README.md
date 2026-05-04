@@ -212,6 +212,7 @@ wiki4llm run
 The loop runs until `pending/plan.md` is fully checked off:
 
 ```
+[Mapper*]    (pre-flight) walks codebase, writes map/structure.md + entities/ — skipped if already mapped or no source files exist
 [Clarifier]  reads specs/, surfaces ambiguities, asks user for answers (once only)
 [Planner]    reads specs/ + clarifications, writes pending/plan.md + overview.md
 ```
@@ -235,6 +236,7 @@ wiki4llm run --dry-run              # print feature list, don't build
 wiki4llm run --no-refine            # skip Refiner (faster, less deliberate)
 wiki4llm run --no-verify            # skip Verifier (no test feedback loop)
 wiki4llm run --skip-clarify         # skip the one-time spec clarification pass
+wiki4llm run --force-remap          # re-run the pre-flight mapper even if vault is already mapped
 wiki4llm run --research ux          # enable Research agent (types: ux, web, accessibility, performance, competitor, security)
 wiki4llm run --research web --research-prompt "focus on React 19 patterns"  # with sub-prompt
 wiki4llm run --interactive          # pause after Builder for human review
@@ -281,6 +283,7 @@ If the loop crashes mid-feature, re-run `wiki4llm run`. Each agent checks whethe
 
 | Agent | Skipped if |
 |---|---|
+| Pre-flight Mapper | `map/structure.md` exists (unless `--force-remap`), or no source files found |
 | Clarifier | `raw/clarifications.md` exists and `status` is not `needs-answers` |
 | Planner | Never — always merges |
 | Research | `research/<slug>.md` exists and contains `## Findings` |
@@ -322,7 +325,10 @@ wiki4llm init
 - Detect your LLM CLI tool and generate slash-command files for it (Context and Harness only)
 - Scaffold `.wiki/` with `index.md` and `log.md`
 - Write `.wiki4llm.json`
+- Generate `AGENTS.md` in the project root with detected build, test, and lint commands (Context and Harness only)
 - Add the generated command directory to `.gitignore` (Context and Harness only)
+
+> **Commit `AGENTS.md`** after running `init`. It gives every agent session a reliable source of truth for how to build, test, and lint the project — and the Run Mode Verifier agent reads it directly instead of sniffing the project type.
 
 ### Supported LLM CLI tools
 
@@ -334,6 +340,15 @@ wiki4llm init
 If neither is detected, `init` will prompt you to choose and generate the files anyway.
 
 > The generated command directories are gitignored by default — teammates run `wiki4llm init` themselves and get files generated for their own preferred tool.
+
+### AGENTS.md
+
+`AGENTS.md` is generated at the project root by `wiki4llm init` (Context and Harness modes). It contains the detected build, test, and lint commands for your project and a verification contract that agents must follow after every code change.
+
+- Commit it — teammates and future agent sessions rely on it
+- Edit it manually if the auto-detected commands are wrong
+- Re-run `wiki4llm init` to regenerate it after changing your build tooling
+- Run Mode's Verifier agent reads `AGENTS.md` directly; if the file is absent it falls back to sniffing the project type
 
 ### Updating wiki4llm in an existing project
 
@@ -416,6 +431,7 @@ wiki4llm run [options]
   --no-refine          Skip the Refiner agent
   --no-verify          Skip the Verifier agent (no test feedback loop)
   --skip-clarify       Skip the one-time spec clarification pass
+  --force-remap        Re-run the pre-flight mapper even if map/structure.md already exists
   --research <type>    Enable Research agent (ux|web|accessibility|performance|competitor|security)
   --research-prompt    Sub-prompt appended to the Research agent's instructions
   --dry-run            Print the plan without executing agents
@@ -594,8 +610,9 @@ A fully populated example config with all agents and recommended options enabled
 - `research.prompt` — optional sub-prompt appended to the Research agent's instructions for extra specificity
 - `crewai.model.agents.<name>` — per-agent model override; unset agents fall back to `crewai.model.default`
 - `crewai.interactive: true` — pause after Builder runs and prompt for answers to open questions
-- `crewai.agentTimeout` — wall-clock timeout in seconds for a single agent task (default: 900). If an agent hangs beyond this limit (e.g. a stalled streaming call), it is cancelled and retried automatically. Reduce this if you're on a fast connection and want faster stall detection; increase it for very large tasks on slow hardware.
-- `apiKeys.<provider>` — API key for a remote provider. Values starting with `$` are resolved from environment variables at runtime; bare strings are used directly. Supported providers: `openai`, `anthropic`, `gemini`, `groq`, `mistral`, `cohere`, `together`, `fireworks`.
+- `crewai.agentTimeout` — wall-clock timeout in seconds for a single agent task (default: 120). If an agent hangs beyond this limit (e.g. a stalled streaming call), it is cancelled and retried automatically. Reduce this if you're on a fast connection and want faster stall detection; increase it for very large tasks on slow hardware.
+- `apiKeys.<provider>` — API key for a remote provider. Values starting with `$` are resolved from environment variables at runtime; bare strings are used directly. Supported providers: `openai`, `anthropic`, `gemini`, `groq`, `mistral`, `cohere`, `together`, `fireworks`, `tavily`.
+- `apiKeys.tavily` — enables live web search for the Research agent. Get a free key at [tavily.com](https://tavily.com). Without this key, the Research agent reasons from training knowledge instead.
 
 > **Security:** if you store bare API keys in `.wiki4llm.json`, add it to `.gitignore`. Using `"$ENV_VAR"` references keeps secrets out of the file entirely.
 

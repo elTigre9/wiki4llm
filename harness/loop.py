@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from config import HarnessConfig
 from agents import make_agents, context_percent
-from tasks import make_tasks, make_clarifier_task
+from tasks import make_tasks, make_clarifier_task, make_preflight_mapper_task
 from ui import agent_spinner, print_over_spinner
 from vault import (
     next_unchecked_feature,
@@ -53,24 +53,6 @@ def _clarifications_need_answers(vault_path: str) -> bool:
     return p.exists() and "status: needs-answers" in p.read_text()
 
 
-def _extract_questions(vault_path: str) -> list[str]:
-    p = Path(vault_path) / "raw" / "clarifications.md"
-    if not p.exists():
-        return []
-    lines = p.read_text().splitlines()
-    in_questions = False
-    questions = []
-    for line in lines:
-        if line.strip() == "## Questions":
-            in_questions = True
-            continue
-        if in_questions and line.startswith("## "):
-            break
-        if in_questions and re.match(r"^\d+\.", line.strip()):
-            questions.append(line.strip())
-    return questions
-
-
 def _write_answers(vault_path: str, answers: list[str]) -> None:
     p = Path(vault_path) / "raw" / "clarifications.md"
     text = p.read_text()
@@ -82,14 +64,101 @@ def _write_answers(vault_path: str, answers: list[str]) -> None:
     p.write_text(text)
 
 
+def _read_specs(specs_dir: str) -> str:
+    """Read all spec files and return their contents concatenated with headers."""
+    safe_dir = Path(specs_dir).resolve()
+    parts = []
+    for f in sorted(safe_dir.rglob("*")):
+        if f.is_file() and f.suffix in (".md", ".txt", ".rst", ".yaml", ".yml", ".json"):
+            rel = f.relative_to(safe_dir)
+            try:
+                parts.append(f"### {rel}\n{f.read_text()}")
+            except (OSError, UnicodeDecodeError):
+                pass
+    return "\n\n".join(parts) if parts else "(no spec files found)"
+
+
+def _write_clarifications(vault_path: str, questions: list[str]) -> None:
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+    lines = [f"---", f"status: needs-answers", f"updated: {ts}", f"---", "",
+             "# Spec Clarifications", "", "## Questions", ""]
+    for i, q in enumerate(questions, 1):
+        lines.append(f"{i}. {q}")
+    lines += ["", "## Answers", "", "(to be filled in by the user)", ""]
+    write_vault_file(vault_path, "raw/clarifications.md", "\n".join(lines))
+
+
+def _write_clarifications_clean(vault_path: str) -> None:
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+    content = f"---\nstatus: complete\nupdated: {ts}\n---\n\nNo ambiguities found — specs are ready.\n"
+    write_vault_file(vault_path, "raw/clarifications.md", content)
+
+
+def _vault_mapped(vault_path: str) -> bool:
+    return (Path(vault_path) / "map" / "structure.md").exists()
+
+
+def _project_has_source(project_root: str, specs_dir: str) -> bool:
+    """Return True if there are non-spec source files in the project."""
+    root = Path(project_root).resolve()
+    specs = Path(specs_dir).resolve()
+    for f in root.rglob("*"):
+        if not f.is_file():
+            continue
+        # Skip hidden dirs, specs dir, and common non-source dirs
+        parts = f.parts
+        if any(p.startswith(".") for p in parts[len(root.parts):]):
+            continue
+        try:
+            f.relative_to(specs)
+            continue  # inside specs dir
+        except ValueError:
+            pass
+        if f.suffix in (".py", ".ts", ".js", ".tsx", ".jsx", ".go", ".rs",
+                        ".java", ".rb", ".cs", ".cpp", ".c", ".php", ".kt"):
+            return True
+    return False
+
+
+def run_preflight_mapper(agents: dict, config: HarnessConfig) -> int:
+    """Map the existing codebase into the vault before any other agent runs."""
+    if not config.force_remap and _vault_mapped(config.vault_path):
+        if config.verbose:
+            print("[mapper] pre-flight skipped — map/structure.md already exists")
+        return 0
+
+    if not _project_has_source(config.project_root, config.specs_dir):
+        if config.verbose:
+            print("[mapper] pre-flight skipped — no source files found")
+        return 0
+
+    preflight_tasks = {"mapper": make_preflight_mapper_task(agents, config)}
+    try:
+        with agent_spinner("mapper", config.verbose, model=config.model_for("mapper"),
+                           trace=config.trace, vault_path=config.vault_path,
+                           slug="__preflight__") as stats:
+            result = run_with_retry(agents, preflight_tasks, "mapper", config, "__preflight__",
+                                    pause_event=stats.get("pause_event"))
+            stats["usage"] = getattr(result, "token_usage", None)
+            stats["ctx_pct"] = context_percent(config.model_for("mapper"), stats["usage"])
+        append_log(config.vault_path, "mapper", "__preflight__", "Pre-flight map complete.")
+    except HarnessError as e:
+        print(f"wiki4llm: pre-flight mapper failed: {e}")
+        return 1
+    return 0
+
+
 def run_spec_clarifier(agents: dict, config: HarnessConfig) -> int:
-    """One-time pre-flight: LLM reads specs, surfaces questions, user answers, vault records them."""
+    """One-time pre-flight: harness reads specs, LLM surfaces questions, user answers, harness writes vault."""
     if _clarifications_done(config.vault_path):
         if config.verbose:
             print("[clarifier] skipped — raw/clarifications.md already complete")
         return 0
 
-    clarifier_task = make_clarifier_task(agents, config, config.specs_dir)
+    specs_content = _read_specs(config.specs_dir)
+    clarifier_task = make_clarifier_task(agents, config, specs_content)
 
     try:
         with agent_spinner("clarifier", config.verbose, model=config.model_for("clarifier"),
@@ -102,17 +171,26 @@ def run_spec_clarifier(agents: dict, config: HarnessConfig) -> int:
         print(f"wiki4llm: clarifier failed: {e}")
         return 1
 
-    if not _clarifications_need_answers(config.vault_path):
-        # LLM found no ambiguities — proceed
+    raw_output = getattr(result, "raw", "").strip()
+
+    if not raw_output or "NO_QUESTIONS" in raw_output:
+        _write_clarifications_clean(config.vault_path)
         append_log(config.vault_path, "clarifier", "__clarify__", "Specs reviewed — no ambiguities found.")
         return 0
 
-    # Present questions to the user
-    questions = _extract_questions(config.vault_path)
+    # Parse numbered questions from LLM output
+    questions = [
+        line.strip() for line in raw_output.splitlines()
+        if re.match(r"^\d+[.)]", line.strip())
+    ]
     if not questions:
-        append_log(config.vault_path, "clarifier", "__clarify__", "Specs reviewed — no questions extracted.")
+        _write_clarifications_clean(config.vault_path)
+        append_log(config.vault_path, "clarifier", "__clarify__", "Specs reviewed — no questions parsed.")
         return 0
 
+    _write_clarifications(config.vault_path, questions)
+
+    # Present questions to the user
     print("\n" + "─" * 60)
     print("wiki4llm: The Clarifier found ambiguities in your specs.")
     print("Answer each question (press Enter to skip and let agents infer):")
@@ -130,6 +208,9 @@ def run_spec_clarifier(agents: dict, config: HarnessConfig) -> int:
                f"Specs reviewed. {len(questions)} question(s) answered by user. See raw/clarifications.md.")
     print("wiki4llm: Answers recorded. Continuing...\n")
     return 0
+
+
+def _unused_scaffold_stub():
     for fname, content in [
         ("index.md", "# Index\n\n"),
         ("log.md", "# Log\n\n"),
@@ -175,7 +256,7 @@ def _is_empty_response(exc: Exception) -> bool:
 # Wall-clock timeout for a single agent task (seconds).
 # Covers hung streaming calls that never raise — the HTTP-level LLM timeout
 # only fires on response *start*, not on a stalled mid-stream completion.
-_AGENT_WALL_TIMEOUT = 900  # 15 min default; override via config.agent_timeout
+_AGENT_WALL_TIMEOUT = 120  # 2 min default; override via config.agent_timeout
 
 
 def _run_agent(agents: dict, tasks: dict, agent_name: str, verbose: bool = False):
@@ -202,7 +283,7 @@ def _run_agent_worker(agents: dict, tasks: dict, agent_name: str, result_queue: 
     try:
         result = _run_agent(agents, tasks, agent_name, verbose)
         result_queue.put(("ok", result))
-    except Exception as e:
+    except (RuntimeError, ValueError, TypeError, OSError) as e:
         result_queue.put(("err", e))
 
 
@@ -215,7 +296,7 @@ def _run_agent_with_timeout(agents: dict, tasks: dict, agent_name: str, timeout:
     # on the pipe write until the parent drains it — p.join() first would deadlock.
     try:
         status, value = q.get(timeout=timeout)
-    except Exception:
+    except multiprocessing.queues.Empty:
         # Timed out waiting for a result — kill the child and retry.
         if p.is_alive():
             p.kill()
@@ -233,7 +314,7 @@ def _run_agent_with_timeout(agents: dict, tasks: dict, agent_name: str, timeout:
 # Ollama cloud models (minimax-m2, GLM5.1, etc.) occasionally return empty
 # responses or hang mid-stream. Both are transient — a short wait + retry recovers them.
 _STALL_MAX_RETRIES = 5
-_STALL_BACKOFF = 15  # seconds between stall retries
+_STALL_BACKOFF = 5  # seconds between stall retries
 
 
 def run_with_retry(agents: dict, tasks: dict, agent_name: str, config: HarnessConfig, slug: str,
@@ -243,7 +324,7 @@ def run_with_retry(agents: dict, tasks: dict, agent_name: str, config: HarnessCo
     for attempt in range(MAX_RETRIES + 1):
         try:
             return _run_agent_with_timeout(agents, tasks, agent_name, wall_timeout, verbose=config.verbose)
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, OSError, TimeoutError) as e:
             is_stall = _is_empty_response(e) or isinstance(e, TimeoutError)
             if is_stall and stall_attempts < _STALL_MAX_RETRIES:
                 stall_attempts += 1
@@ -359,21 +440,21 @@ def run_loop(config: HarnessConfig) -> int:
     plan_path = _safe_vault_path(config.vault_path, "pending", "plan.md")
     agents = make_agents(config)
 
-    # Planner runs only if plan.md is missing or has no unchecked features yet
+    # Pre-flight mapper — runs once if vault isn't mapped and source files exist
+    if not config.dry_run:
+        rc = run_preflight_mapper(agents, config)
+        if rc != 0:
+            return rc
+
     # Spec clarifier — runs once before the Planner, skipped if --skip-clarify or already done
     if not config.skip_clarify and not config.dry_run:
         rc = run_spec_clarifier(agents, config)
         if rc != 0:
             return rc
 
-    plan_needs_init = (
-        not plan_path.exists()
-        or next_unchecked_feature(str(plan_path)) is None
-        and not any(
-            re.match(r"- \[x\]", line)
-            for line in (plan_path.read_text().splitlines() if plan_path.exists() else [])
-        )
-    )
+    plan_text_lines = plan_path.read_text().splitlines() if plan_path.exists() else []
+    plan_has_any_feature = any(re.match(r"- \[.\]", line) for line in plan_text_lines)
+    plan_needs_init = not plan_path.exists() or not plan_has_any_feature
     if plan_needs_init:
         planner_tasks = make_tasks(agents, config, ("__init__", "Initialize project plan"))
         try:

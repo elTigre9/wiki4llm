@@ -29,6 +29,7 @@ program
   .option("--no-refine", "Skip the Refiner agent")
   .option("--no-verify", "Skip the Verifier agent")
   .option("--skip-clarify", "Skip the one-time spec clarification pass")
+  .option("--force-remap", "Re-run the pre-flight mapper even if map/structure.md already exists")
   .option("--research <type>", "Enable Research agent (ux|web|accessibility|performance|competitor|security)")
   .option("--research-prompt <text>", "Sub-prompt for the Research agent")
   .option("--dry-run", "Print the plan without executing agents")

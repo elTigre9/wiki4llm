@@ -9,6 +9,8 @@ from config import HarnessConfig, SecurityConfig
 
 def _strip_html(text: str) -> str:
     """Remove HTML tags and neutralize HTML entities to prevent stored XSS."""
+    import html
+    text = html.unescape(text)
     return re.sub(r"<[^>]+>", "", text)
 
 def _ctx_window(model: str) -> int | None:
@@ -101,46 +103,56 @@ class ShellTool(BaseTool):
     security: SecurityConfig = SecurityConfig()
 
     def _run(self, command: str) -> str:
+        import shlex
         if err := self.security.check_command(command):
             return f"Error: {err}"
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, text=True,
+                shlex.split(command), shell=False, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL, timeout=120,
             )
             return result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            return f"Error: command timed out after 120s: {command}"
+        except (subprocess.TimeoutExpired, ValueError) as e:
+            return f"Error: {e}"
 
 
-class WebSearchTool(BaseTool):
+class TavilySearchTool(BaseTool):
     name: str = "web_search"
     description: str = (
         "Search the web for a query and return a summary of the top results. "
         "Use for researching trends, patterns, libraries, or best practices."
     )
     args_schema: type[BaseModel] = _SearchInput
-    security: SecurityConfig = SecurityConfig()
+    api_key: str
 
     def _run(self, query: str) -> str:
-        # Try DuckDuckGo instant answer API (no key required)
-        cmd = (
-            f"python3 -c \""
-            f"import urllib.request, urllib.parse, json; "
-            f"q = urllib.parse.urlencode({{'q': {repr(query)}, 'format': 'json', 'no_html': '1', 'skip_disambig': '1'}}); "
-            f"r = urllib.request.urlopen('https://api.duckduckgo.com/?' + q, timeout=10); "
-            f"d = json.loads(r.read()); "
-            f"results = [d.get('AbstractText', '')] + [t.get('Text','') for t in d.get('RelatedTopics',[])[:5]]; "
-            f"print('\\n'.join(r for r in results if r))\""
-        )
-        if err := self.security.check_command(cmd):
-            return f"(web search unavailable: {err}) — use your training knowledge to answer the query: {query}"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        output = (result.stdout + result.stderr).strip()
-        return output if output else f"(no results) — use your training knowledge to answer the query: {query}"
+        import urllib.request, urllib.parse, json
+        try:
+            payload = json.dumps({
+                "api_key": self.api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 5,
+                "include_answer": True,
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.tavily.com/search",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
+                d = json.loads(r.read())
+            parts = []
+            if d.get("answer"):
+                parts.append(f"Summary: {d['answer']}")
+            for result in d.get("results", []):
+                parts.append(f"- {result.get('title', '')}\n  {result.get('url', '')}\n  {result.get('content', '')[:300]}")
+            return "\n\n".join(parts) if parts else "(no results found)"
+        except (OSError, ValueError) as e:
+            return f"(web search failed: {e})"
 
 
-_LLM_TIMEOUT = 300  # seconds — HTTP-level timeout per LiteLLM call
+_LLM_TIMEOUT = 60  # seconds — HTTP-level timeout per LiteLLM call
 
 
 def make_agents(config: HarnessConfig) -> dict:
@@ -153,7 +165,9 @@ def make_agents(config: HarnessConfig) -> dict:
         VaultReadTool(vault_path=config.vault_path, security=sec),
     ]
     shell = ShellTool(security=sec)
-    web_search = WebSearchTool(security=sec)
+
+    tavily_key = getattr(config.research, "tavily_api_key", "")
+    research_tools = [*vault_rw, TavilySearchTool(api_key=tavily_key)] if tavily_key else vault_rw
 
     agents = {
         "clarifier": Agent(
@@ -200,7 +214,7 @@ def make_agents(config: HarnessConfig) -> dict:
             tools=[*vault_rw, shell],
             allow_delegation=False,
             verbose=config.verbose,
-            max_iter=25,
+            max_iter=10,
         ),
         "verifier": Agent(
             role="Test Verifier",
@@ -210,7 +224,7 @@ def make_agents(config: HarnessConfig) -> dict:
             tools=[*vault_rw, shell],
             allow_delegation=False,
             verbose=config.verbose,
-            max_iter=15,
+            max_iter=8,
         ),
         "mapper": Agent(
             role="Vault Mapper",
@@ -220,6 +234,7 @@ def make_agents(config: HarnessConfig) -> dict:
             tools=[*vault_rw, shell],
             allow_delegation=False,
             verbose=config.verbose,
+            max_iter=12,
         ),
     }
 
@@ -229,9 +244,10 @@ def make_agents(config: HarnessConfig) -> dict:
             goal="Gather targeted research relevant to the feature and write a concise findings report",
             backstory="You surface trends, patterns, and prior art so the team builds on solid ground.",
             llm=llm("research"),
-            tools=[*vault_rw, web_search],
+            tools=research_tools,
             allow_delegation=False,
             verbose=config.verbose,
+            max_iter=8,
         )
 
     return agents

@@ -9,9 +9,10 @@ interface RunOptions {
   model?: string;
   maxFeatures?: number;
   interactive?: boolean;
-  noRefine?: boolean;
-  noVerify?: boolean;
+  refine?: boolean;
+  verify?: boolean;
   skipClarify?: boolean;
+  forceRemap?: boolean;
   research?: string;
   researchPrompt?: string;
   dryRun?: boolean;
@@ -71,9 +72,10 @@ function buildMergedConfig(config: any, opts: RunOptions): object {
     },
     _run: {
       specsDir: opts.specs ?? config.project.specsDir ?? "specs",
-      noRefine: opts.noRefine ?? false,
-      noVerify: opts.noVerify ?? false,
+      noRefine: opts.refine === false,
+      noVerify: opts.verify === false,
       skipClarify: opts.skipClarify ?? false,
+      forceRemap: opts.forceRemap ?? false,
       dryRun: opts.dryRun ?? false,
       verbose: opts.verbose ?? false,
       trace: opts.trace ?? false,

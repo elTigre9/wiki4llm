@@ -22,16 +22,20 @@ class ResearchConfig:
     enabled: bool = False
     type: str = "web"          # one of _RESEARCH_TYPES
     prompt: str = ""           # optional sub-prompt for extra focus
+    tavily_api_key: str = ""   # set via apiKeys.tavily in .wiki4llm.json
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "ResearchConfig":
+    def from_dict(cls, raw: dict, api_keys: dict = None) -> "ResearchConfig":
         t = raw.get("type", "web")
         if t not in _RESEARCH_TYPES:
             raise ValueError(f"research.type must be one of {sorted(_RESEARCH_TYPES)}, got '{t}'")
+        tavily_raw = (api_keys or {}).get("tavily", "")
+        tavily_key = os.environ.get(tavily_raw[1:], "") if tavily_raw.startswith("$") else tavily_raw
         return cls(
             enabled=raw.get("enabled", False),
             type=t,
             prompt=raw.get("prompt", ""),
+            tavily_api_key=tavily_key,
         )
 
 
@@ -94,6 +98,7 @@ class HarnessConfig:
     no_refine: bool
     no_verify: bool
     skip_clarify: bool
+    force_remap: bool
     dry_run: bool
     verbose: bool
     trace: bool
@@ -140,13 +145,14 @@ class HarnessConfig:
             no_refine=run_cfg.get("noRefine", False),
             no_verify=run_cfg.get("noVerify", False),
             skip_clarify=run_cfg.get("skipClarify", False),
+            force_remap=run_cfg.get("forceRemap", False),
             dry_run=run_cfg.get("dryRun", False),
             verbose=run_cfg.get("verbose", False),
             trace=run_cfg.get("trace", False),
             verifier_retries=crewai.get("verifierRetries", 2),
-            agent_timeout=crewai.get("agentTimeout", 900),
+            agent_timeout=crewai.get("agentTimeout", 120),
             project_root=".",
             api_keys=raw.get("apiKeys", {}),
             security=SecurityConfig.from_dict(raw.get("security", {})),
-            research=ResearchConfig.from_dict(raw.get("research", {})),
+            research=ResearchConfig.from_dict(raw.get("research", {}), raw.get("apiKeys", {})),
         )
