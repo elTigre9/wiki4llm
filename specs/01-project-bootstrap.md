@@ -79,12 +79,14 @@ program
 
 program
   .command("run")
-  .description("Run the autonomous CrewAI harness (Run Mode only)")
+  .description("Run the autonomous BAML agent loop (Run Mode only)")
   .option("--specs <dir>", "Specs directory", "specs")
-  .option("--model <string>", "Override default model for all agents")
   .option("--max-features <n>", "Stop after N features", parseInt)
   .option("--interactive", "Pause at human checkpoints")
   .option("--no-refine", "Skip the Refiner agent")
+  .option("--no-verify", "Skip the Verifier agent")
+  .option("--skip-clarify", "Skip the one-time spec clarification pass")
+  .option("--force-remap", "Re-run the pre-flight mapper")
   .option("--dry-run", "Print the plan without executing agents")
   .option("--verbose", "Stream agent output to stdout")
   .action((opts) => wikiRun(opts));
@@ -118,15 +120,15 @@ export interface ProjectConfig {
 
 export interface CrewAIModelConfig {
   default: string;
-  agents?: Partial<Record<"planner" | "refiner" | "architect" | "builder" | "mapper", string>>;
+  agents?: Partial<Record<"clarifier" | "planner" | "research" | "refiner" | "architect" | "builder" | "verifier" | "mapper", string>>;
 }
 
 export interface CrewAIConfig {
   model: CrewAIModelConfig;
   maxFeatures: number | null;
   interactive: boolean;
-  pythonPath: string;
-  harnessScript: string;
+  verifierRetries: number;
+  agentTimeout: number;
 }
 
 export interface SlashCommandConfig {
@@ -167,7 +169,8 @@ export function defaultConfig(name: string): WikiConfig {
 ## `harness/requirements.txt`
 
 ```
-crewai>=0.80.0
+baml-py>=0.222.0
+python-dotenv>=1.0.0
 ```
 
 ---

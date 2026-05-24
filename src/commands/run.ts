@@ -6,7 +6,6 @@ import { loadConfig } from "../config";
 
 interface RunOptions {
   specs?: string;
-  model?: string;
   maxFeatures?: number;
   interactive?: boolean;
   refine?: boolean;
@@ -14,10 +13,10 @@ interface RunOptions {
   skipClarify?: boolean;
   forceRemap?: boolean;
   research?: string;
-  researchPrompt?: string;
   dryRun?: boolean;
   verbose?: boolean;
   trace?: boolean;
+  maturity?: string;
 }
 
 export function wikiRun(opts: RunOptions): void {
@@ -28,8 +27,8 @@ export function wikiRun(opts: RunOptions): void {
     process.exit(1);
   }
 
-  const pythonPath = config.crewai.pythonPath ?? "python3";
-  const harnessScript = path.resolve(config.crewai.harnessScript);
+  const pythonPath = "python3";
+  const harnessScript = path.resolve("harness/main.py");
 
   checkPythonDeps(pythonPath, harnessScript);
 
@@ -53,7 +52,7 @@ function checkPythonDeps(pythonPath: string, harnessScript: string): void {
     process.exit(1);
   }
 
-  const check = spawnSync(pythonPath, ["-c", "import crewai"], { stdio: "pipe" });
+  const check = spawnSync(pythonPath, ["-c", "import baml_py"], { stdio: "pipe" });
   if (check.status !== 0) {
     console.error("wiki4llm: Python harness dependencies not found.");
     console.error("Run: wiki4llm install-deps");
@@ -66,7 +65,6 @@ function buildMergedConfig(config: any, opts: RunOptions): object {
     ...config,
     crewai: {
       ...config.crewai,
-      ...(opts.model && { model: { default: opts.model, agents: {} } }),
       ...(opts.maxFeatures !== undefined && { maxFeatures: opts.maxFeatures }),
       ...(opts.interactive !== undefined && { interactive: opts.interactive }),
     },
@@ -80,8 +78,12 @@ function buildMergedConfig(config: any, opts: RunOptions): object {
       verbose: opts.verbose ?? false,
       trace: opts.trace ?? false,
     },
+    project: {
+      ...config.project,
+      ...(opts.maturity && { maturity: opts.maturity }),
+    },
     research: opts.research
-      ? { enabled: true, type: opts.research, prompt: opts.researchPrompt ?? "" }
-      : (config.research ?? { enabled: false, type: "web", prompt: "" }),
+      ? { enabled: true, type: opts.research }
+      : (config.research ?? { enabled: false, type: "web" }),
   };
 }

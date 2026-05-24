@@ -42,8 +42,7 @@ export interface CrewAIConfig {
   maxFeatures: number | null;
   interactive: boolean;
   verifierRetries: number;
-  pythonPath: string;
-  harnessScript: string;
+  agentTimeout: number;
 }
 
 export interface HarnessConfig {

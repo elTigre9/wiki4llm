@@ -1,9 +1,7 @@
 import argparse
 import json
-import multiprocessing
 import sys
 from pathlib import Path
-from loop import run_loop
 from config import HarnessConfig
 
 
@@ -13,13 +11,12 @@ def _load_dotenv(config_path: str) -> None:
         from dotenv import load_dotenv
         env_file = Path(config_path).parent / ".env"
         if env_file.exists():
-            load_dotenv(env_file, override=False)  # shell env takes precedence
+            load_dotenv(env_file, override=False)
     except ImportError:
-        pass  # python-dotenv not installed; silently skip
+        pass
 
 
 def main():
-    multiprocessing.set_start_method("fork", force=True)  # fork avoids re-importing on macOS/Linux
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to merged config JSON")
     args = parser.parse_args()
@@ -49,7 +46,8 @@ def main():
     agents.append("mapper")
     print("  Agents:  " + "  ".join(f"{a}={config.model_for(a)}" for a in agents) + "\n")
 
-    sys.exit(run_loop(config))
+    from baml_loop import run_loop_baml
+    sys.exit(run_loop_baml(config))
 
 
 if __name__ == "__main__":

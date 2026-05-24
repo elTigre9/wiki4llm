@@ -62,13 +62,13 @@ Designed for local LLM setups (ollama, llama.cpp, vllm) where context window siz
 > To switch modes after init, re-run `wiki4llm init` and select the other mode. This regenerates the slash-command files in place.
 
 ### Run Mode
-Fully autonomous CrewAI harness. Run `wiki4llm run` once and it drives the entire build loop — no slash-commands, no manual phase switching. Up to six agents run in sequence per feature: Planner → [Research] → Refiner → Architect → Builder → Verifier → Mapper. Research is optional.
+Fully autonomous BAML agent loop. Run `wiki4llm run` once and it drives the entire build loop — no slash-commands, no manual phase switching. Six specialist agents run in sequence per feature (plus a one-time Clarifier pass): Clarifier → Planner → [Research] → Refiner → Architect → Builder → Verifier → Mapper. Research is optional. The loop uses BAML typed structured outputs and pre-loaded vault context for fewer LLM round-trips. Set `"engine": "baml"` and `"project.maturity": "prototype"` in `.wiki4llm.json` for faster pre-1.0 builds.
 
 This mode lives in the CLI rather than inside your LLM tool for a fundamental reason: each agent needs a clean context window. A slash-command running inside OpenCode or Claude Code can't wipe its own context and restart — so control moves to the CLI, where the harness manages context resets between agents automatically.
 
 The loop is idempotent: if it crashes mid-feature, re-running resumes from where it left off. The vault is the only persistent state.
 
-Requires Python 3 and `wiki4llm install-deps`. Works with any LiteLLM-compatible backend (Ollama, OpenAI, Anthropic, etc.).
+Requires Python 3 and `wiki4llm install-deps`. Works with Ollama (local + cloud) and Anthropic natively via BAML.
 
 > To switch modes after init, re-run `wiki4llm init` and select the other mode.
 
@@ -194,7 +194,7 @@ If Phase 1 didn't commit anything, Phase 2 has nothing to map. Always commit or 
 
 Best for when you want a fully autonomous build loop with no manual phase switching.
 
-**The core idea:** one command drives the entire loop. Five specialist agents run in sequence per feature. The vault is the only persistent state — the loop is idempotent and resumes cleanly after a crash.
+**The core idea:** one command drives the entire loop. Six specialist agents run in sequence per feature. The vault is the only persistent state — the loop is idempotent and resumes cleanly after a crash.
 
 **Scenario:** You have a `specs/` directory and want to build the whole thing hands-off.
 
@@ -229,6 +229,8 @@ The loop runs until `pending/plan.md` is fully checked off:
              → repeat for next feature
 ```
 
+The loop is driven by BAML (not CrewAI). Each agent call uses typed structured outputs (defined in `baml_src/agents.baml`) instead of regex-based text parsing. The vault is pre-loaded as context before each agent runs, reducing LLM round-trips. In `prototype` maturity mode, Planner generates shorter plans and Verifier skips per-criterion mapping for faster iteration.
+
 #### Useful flags
 
 ```bash
@@ -238,26 +240,11 @@ wiki4llm run --no-verify            # skip Verifier (no test feedback loop)
 wiki4llm run --skip-clarify         # skip the one-time spec clarification pass
 wiki4llm run --force-remap          # re-run the pre-flight mapper even if vault is already mapped
 wiki4llm run --research ux          # enable Research agent (types: ux, web, accessibility, performance, competitor, security)
-wiki4llm run --research web --research-prompt "focus on React 19 patterns"  # with sub-prompt
 wiki4llm run --interactive          # pause after Builder for human review
 wiki4llm run --max-features 1       # build one feature then stop
-wiki4llm run --model openai/gpt-4o  # override model for all agents
+wiki4llm run --maturity prototype   # fast pre-1.0 builds (default: stable)
 wiki4llm run --trace                # print a heartbeat line every 60s while an agent is thinking
 ```
-
-#### Token usage display
-
-When `--verbose` is on, each agent prints a summary line after it finishes:
-
-```
-  ✓ [mapper] done (1m 24s)  [390,568 tokens (cumulative), ↑310,421 ↓80,147, peak ctx ~152.6%]
-```
-
-- **tokens (cumulative)** — total tokens summed across every LLM call the agent made during its task (tool reads, reasoning steps, writes). A single agent task typically involves many calls, so this number can exceed your model's context window limit — that's expected.
-- **↑ / ↓** — cumulative prompt tokens sent vs. completion tokens received.
-- **peak ctx ~%** — an estimate of context pressure, calculated as `cumulative tokens / context window size`. Because it's cumulative, values over 100% are normal and just mean the agent made more than one full context window's worth of calls. It is not a guarantee that any single call stayed within the limit.
-
-If you need per-call context tracking (to catch actual context overflow), that requires hooking into LiteLLM's callback system — not currently implemented.
 
 #### Per-agent model overrides
 
@@ -276,6 +263,8 @@ Set different models per agent in `.wiki4llm.json`:
   }
 }
 ```
+
+> The `crewai.model.agents` structure is retained for legacy compatibility and consumed by both engines. BAML maps these to BAML client names automatically.
 
 #### Idempotency
 
@@ -425,7 +414,6 @@ Run Mode uses `wiki4llm run` directly — no slash-commands.
 wiki4llm run [options]
 
   --specs <dir>        Specs directory (default: "specs")
-  --model <string>     Override default model for all agents
   --max-features <n>   Stop after N features
   --interactive        Pause at human checkpoints
   --no-refine          Skip the Refiner agent
@@ -433,10 +421,9 @@ wiki4llm run [options]
   --skip-clarify       Skip the one-time spec clarification pass
   --force-remap        Re-run the pre-flight mapper even if map/structure.md already exists
   --research <type>    Enable Research agent (ux|web|accessibility|performance|competitor|security)
-  --research-prompt    Sub-prompt appended to the Research agent's instructions
+  --maturity <mode>    Build maturity: prototype (fast, pre-1.0) or stable (default)
   --dry-run            Print the plan without executing agents
-  --verbose            Stream agent output to stdout; prints cumulative token
-                       usage and estimated context % per agent after each task
+  --verbose            Stream agent output to stdout
   --trace              Print a heartbeat line every 60s while an agent is
                        thinking; also ensures stall warnings are not overwritten
 ```
@@ -462,6 +449,8 @@ The agent owns all vault writes. You read it.
   overview.md           # high-level codebase summary
   raw/                  # unedited inputs: copied from specs/, notes
     assets/             # images, PDFs, media
+    clarifications.md   # spec ambiguities surfaced by Clarifier (Run Mode)
+    <slug>/TECH.md      # living tech spec written by Architect (Run Mode)
   map/
     structure.md        # directory tree + file roles
     dependencies.md     # key deps, versions, relationships
@@ -476,6 +465,7 @@ The agent owns all vault writes. You read it.
     plan.md             # feature checklist derived from specs/ (Harness + Run Mode)
     questions.md        # grey area queue; Builder writes, Mapper resolves
     plan-<slug>.md      # per-feature implementation plan (Run Mode)
+    verify-<slug>.md    # Verifier test results mapped to acceptance criteria (Run Mode)
 ```
 
 The vault is a plain git repo of markdown files. Obsidian is optional — everything works headlessly without it.
@@ -544,10 +534,12 @@ A fully populated example config with all agents and recommended options enabled
     "sync": false,
     "external": false
   },
+  "engine": "baml",
   "project": {
     "name": "my-project",
     "ignore": ["node_modules", "dist", ".git"],
-    "specsDir": "specs"
+    "specsDir": "specs",
+    "maturity": "stable"
   },
   "harness": {
     "maxIterations": 3,
@@ -570,9 +562,7 @@ A fully populated example config with all agents and recommended options enabled
     "maxFeatures": null,
     "interactive": false,
     "verifierRetries": 2,
-    "agentTimeout": 900,
-    "pythonPath": "python3",
-    "harnessScript": "harness/main.py"
+    "agentTimeout": 900
   },
   "research": {
     "enabled": false,
@@ -608,7 +598,9 @@ A fully populated example config with all agents and recommended options enabled
 - `research.enabled` — set to `true` to run the Research agent before Refiner on each feature
 - `research.type` — focus area: `ux`, `web`, `accessibility`, `performance`, `competitor`, or `security`
 - `research.prompt` — optional sub-prompt appended to the Research agent's instructions for extra specificity
-- `crewai.model.agents.<name>` — per-agent model override; unset agents fall back to `crewai.model.default`
+- `engine` — "baml" (default); the agent loop engine
+- `project.maturity` — build maturity: "prototype" (fast pre-1.0 builds with shorter plans) or "stable" (default)
+- `crewai.model.agents.<name>` — per-agent model override; unset agents fall back to `crewai.model.default`. The `crewai` block name is retained for legacy compatibility; BAML maps these to BAML client names automatically.
 - `crewai.interactive: true` — pause after Builder runs and prompt for answers to open questions
 - `crewai.agentTimeout` — wall-clock timeout in seconds for a single agent task (default: 120). If an agent hangs beyond this limit (e.g. a stalled streaming call), it is cancelled and retried automatically. Reduce this if you're on a fast connection and want faster stall detection; increase it for very large tasks on slow hardware.
 - `apiKeys.<provider>` — API key for a remote provider. Values starting with `$` are resolved from environment variables at runtime; bare strings are used directly. Supported providers: `openai`, `anthropic`, `gemini`, `groq`, `mistral`, `cohere`, `together`, `fireworks`, `tavily`.
@@ -622,7 +614,7 @@ A fully populated example config with all agents and recommended options enabled
 
 > `harness.maxIterations` is no longer used — the loop runs until all features in `pending/plan.md` are checked off.
 
-> The `crewai` block is only present when Run Mode is selected at `init` time. The `harness` block is only used by Context and Harness modes.
+> The `crewai` block (named for legacy compatibility) stores model config consumed by both engines. The `harness` block is only used by Context and Harness modes.
 
 ---
 
@@ -647,6 +639,16 @@ Harness Mode is specifically designed for local LLMs with limited context. Each 
 | Minimum | 8k tokens | 7B+ | One agent at a time, small vault slices |
 | Recommended | 32k tokens | 13B–34B | Comfortable for most agent tasks |
 | Ideal | 64k tokens | 34B+ | Handles complex entity pages and decision records |
+
+### Run Mode
+
+BAML supports Ollama (local + cloud) and Anthropic natively. Per-agent model overrides in `.wiki4llm.json` map to BAML client names automatically.
+
+| Tier | Context Window | Parameters | Notes |
+|---|---|---|---|
+| Minimum | 32k tokens | 7B+ | Suitable for individual agent tasks with focused vault slices |
+| Recommended | 64k tokens | 32B+ | Handles multi-approach evaluation and planning |
+| Ideal | 128k+ tokens | 70B+ / frontier API | Full pipeline with research and comprehensive verification |
 
 ### Model Specialization
 
@@ -688,7 +690,7 @@ Some commands benefit from specific model strengths:
 | `obsidian-cli` or `obsidian` on PATH | Headless vault open/refresh; auto-detected at runtime |
 | [git](https://git-scm.com) | Vault versioning and diff-aware updates (strongly recommended) |
 | [ollama](https://ollama.com) / [llama.cpp](https://github.com/ggerganov/llama.cpp) / [vllm](https://github.com/vllm-project/vllm) | Local LLM backends for Harness and Run modes |
-| [Python 3](https://python.org) + [crewai](https://github.com/crewAIInc/crewAI) | Required for Run Mode (`wiki4llm install-deps`) |
+| [Python 3](https://python.org) + [baml-py](https://github.com/BoundaryML/baml) | Required for Run Mode (`wiki4llm install-deps`) |
 
 ---
 
@@ -711,7 +713,7 @@ npm run dev -- init
 | 2 — Build & Tooling | `/wiki-build`, Obsidian CLI detection |
 | 3 — Maintenance & Sync | `/wiki-update`, `/wiki-lint`, push/pull sync |
 | 4 — Harness Mode | `/wiki-run`, specialist agents, grey area queue, external vault |
-| 5 — Run Mode | `wiki4llm run`, CrewAI harness, Planner/Refiner/Architect/Builder/Mapper, idempotent loop |
+| 5 — Run Mode | `wiki4llm run`, BAML agent loop, Planner/Refiner/Architect/Builder/Mapper, idempotent loop |
 
 Out of scope for v1: embedding/vector search, confidence scoring, multi-agent mesh sync, web UI.
 # wiki4llm

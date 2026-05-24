@@ -43,7 +43,7 @@ generation entirely.
 ? Which mode do you want?
   ❯ Context Mode   — slash-commands in your LLM tool; you drive the loop
     Harness Mode   — slash-commands with a two-phase loop; semi-autonomous
-    Run Mode       — autonomous CrewAI harness; set it and forget it
+    Run Mode       — autonomous BAML agent loop; set it and forget it
 ```
 
 ---

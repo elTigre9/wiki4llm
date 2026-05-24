@@ -1,2 +1,3 @@
-crewai>=0.80.0
+baml-py>=0.222.0
 python-dotenv>=1.0.0
+

@@ -105,6 +105,8 @@ class HarnessConfig:
     verifier_retries: int
     agent_timeout: int
     project_root: str
+    engine: str = "crewai"
+    maturity: str = "stable"  # "prototype" | "stable"
     api_keys: dict = field(default_factory=dict)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     research: ResearchConfig = field(default_factory=ResearchConfig)
@@ -151,6 +153,8 @@ class HarnessConfig:
             trace=run_cfg.get("trace", False),
             verifier_retries=crewai.get("verifierRetries", 2),
             agent_timeout=crewai.get("agentTimeout", 120),
+            engine=raw.get("engine", "crewai"),
+            maturity=project_cfg.get("maturity", "stable"),
             project_root=".",
             api_keys=raw.get("apiKeys", {}),
             security=SecurityConfig.from_dict(raw.get("security", {})),

@@ -11,13 +11,13 @@ export function wikiInstallDeps(): void {
     process.exit(1);
   }
 
-  const requirementsPath = path.join(path.dirname(config.crewai.harnessScript), "requirements.txt");
+  const requirementsPath = path.resolve("harness", "requirements.txt");
   if (!fs.existsSync(requirementsPath)) {
     console.error(`wiki4llm: requirements.txt not found at ${requirementsPath}`);
     process.exit(1);
   }
 
-  const pythonPath = config.crewai.pythonPath ?? "python3";
+  const pythonPath = "python3";
   console.log(`wiki4llm: installing Python deps from ${requirementsPath}...`);
   const result = spawnSync(pythonPath, ["-m", "pip", "install", "-r", requirementsPath], { stdio: "inherit" });
   process.exit(result.status ?? 1);

@@ -132,7 +132,7 @@ export async function wikiInit(cwd = process.cwd()): Promise<void> {
     const ask = (q: string, def: string) =>
       new Promise<string>((res) => rl.question(`${q} [${def}]: `, (a) => res(a.trim() || def)));
 
-    console.log("\nModes:\n  context — you drive the loop\n  harness — autonomous multi-agent loop (slash-commands)\n  run     — fully autonomous CrewAI harness; set it and forget it");
+    console.log("\nModes:\n  context — you drive the loop\n  harness — autonomous multi-agent loop (slash-commands)\n  run     — fully autonomous BAML agent loop; set it and forget it");
     const modeInput = await ask("Mode (context/harness/run)", existing.mode);
     const mode: Mode = modeInput === "harness" ? "harness" : modeInput === "run" ? "run" : "context";
 
@@ -159,7 +159,6 @@ export async function wikiInit(cwd = process.cwd()): Promise<void> {
       ...(mode === "run" && existing.crewai && {
         crewai: {
           ...existing.crewai,
-          harnessScript: safePackagePath(path.resolve(__dirname, "../../harness"), "main.py"),
           },
         }),
       };
@@ -211,7 +210,7 @@ export async function wikiInit(cwd = process.cwd()): Promise<void> {
     : safeProjectPath(cwd, vaultPathInput);
 
   // Mode selection
-  console.log("\nModes:\n  context — you drive the loop (default)\n  harness — autonomous multi-agent loop (slash-commands)\n  run     — fully autonomous CrewAI harness; set it and forget it");
+  console.log("\nModes:\n  context — you drive the loop (default)\n  harness — autonomous multi-agent loop (slash-commands)\n  run     — fully autonomous BAML agent loop; set it and forget it");
   const modeInput = await ask("Mode (context/harness/run)", "context");
   const mode: Mode = modeInput === "harness" ? "harness" : modeInput === "run" ? "run" : "context";
 
@@ -249,8 +248,7 @@ export async function wikiInit(cwd = process.cwd()): Promise<void> {
         maxFeatures: null,
         interactive: false,
         verifierRetries: 2,
-        pythonPath: "python3",
-        harnessScript,
+        agentTimeout: 120,
       },
       security: SECURITY_PRESETS[secLevel],
     };

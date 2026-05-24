@@ -16,12 +16,14 @@
   "project": {
     "name": "my-project",
     "ignore": ["node_modules", "dist", ".git", ".wiki"],
-    "specsDir": "specs"
+    "specsDir": "specs",
+    "maturity": "stable"
   },
   "slashCommands": {
     "mode": "context",
     "tool": "claude"
   },
+  "engine": "baml",
   "crewai": {
     "model": {
       "default": "ollama/qwen2.5-coder:32b",
@@ -35,15 +37,30 @@
     },
     "maxFeatures": null,
     "interactive": false,
-    "pythonPath": "python3",
-    "harnessScript": "harness/main.py"
+    "verifierRetries": 2,
+    "agentTimeout": 120
+  },
+  "research": {
+    "enabled": false,
+    "type": "ux",
+    "prompt": ""
+  },
+  "apiKeys": {
+    "openai":    "$OPENAI_API_KEY",
+    "anthropic": "$ANTHROPIC_API_KEY"
+  },
+  "security": {
+    "level": "open",
+    "shell": { "allow": true },
+    "vault": { "allowPathTraversal": true },
+    "apiKeys": { "requireEnvRefs": false }
   }
 }
 ```
 
 The `slashCommands` block is present only when Context or Harness mode is selected.
-The `crewai` block is present only when Run Mode is selected.
-Both can coexist if the user has run `init` multiple times with different modes.
+The `crewai` block is present only when Run Mode is selected. The key is named
+`crewai` for backward compatibility but consumed by the BAML engine.
 
 ---
 
@@ -66,6 +83,7 @@ Both can coexist if the user has run `init` multiple times with different modes.
 | `name` | string | project dir name | Project identifier |
 | `ignore` | string[] | see above | Directories to skip during codebase mapping |
 | `specsDir` | string | `"specs"` | Where spec files live for Run Mode |
+| `maturity` | string | `"stable"` | `"prototype"` or `"stable"`. Prototype defers full Mapper to end of run and short-circuits Verifier on non-source changes |
 
 ### `slashCommands`
 
@@ -74,16 +92,40 @@ Both can coexist if the user has run `init` multiple times with different modes.
 | `mode` | string | `"context"`, `"harness"` | Which slash-command set was generated |
 | `tool` | string | `"claude"`, `"opencode"` | Which LLM CLI tool the commands were generated for |
 
-### `crewai`
+### `engine`
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `model.default` | string | `"ollama/qwen2.5-coder:32b"` | Fallback model for all agents |
-| `model.agents.<name>` | string | inherits default | Per-agent model override |
+| `engine` | string | `"baml"` | Agent engine. Only `"baml"` is supported (CrewAI was removed in v0.6) |
+
+### `crewai`
+
+The key is named `crewai` for backward compatibility with existing configs. It is consumed by the BAML engine for model routing and loop configuration.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model.default` | string | `"ollama/qwen2.5-coder:32b"` | Fallback model for all agents. Mapped to BAML client names automatically by `_client_for_agent()` in `harness/baml_agents.py`. |
+| `model.agents.<name>` | string | inherits default | Per-agent model override. Model string is mapped to the nearest BAML client name. |
 | `maxFeatures` | number \| null | `null` | Stop after N features; null = run to completion |
-| `interactive` | boolean | `false` | Pause at human checkpoints |
-| `pythonPath` | string | `"python3"` | Python interpreter path |
-| `harnessScript` | string | `"harness/main.py"` | Path to Python harness, relative to project root |
+| `interactive` | boolean | `false` | Pause at human checkpoints after Builder |
+| `verifierRetries` | number | `2` | Max Builder → Verifier retry loops per feature |
+| `agentTimeout` | number | `120` | Wall-clock timeout in seconds for a single agent call |
+
+### `research`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Run the Research agent before Refiner on each feature |
+| `type` | string | `"ux"` | Research focus: `ux`, `web`, `accessibility`, `performance`, `competitor`, `security` |
+| `prompt` | string | `""` | Optional sub-prompt for extra focus |
+
+### `apiKeys`
+
+API keys for remote providers. Values starting with `$` are resolved from environment variables. Supported providers: `openai`, `anthropic`, `gemini`, `groq`, `mistral`, `cohere`, `together`, `fireworks`, `tavily`.
+
+### `security`
+
+See the Security section in README.md.
 
 ---
 
@@ -93,12 +135,17 @@ Both can coexist if the user has run `init` multiple times with different modes.
 wiki4llm run [options]
 
   --specs <dir>        Specs directory (default: project.specsDir or "specs")
-  --model <string>     Override default model for all agents
   --max-features <n>   Stop after N features
   --interactive        Pause at human checkpoints
   --no-refine          Skip the Refiner agent
+  --no-verify          Skip the Verifier agent
+  --skip-clarify       Skip the one-time spec clarification pass
+  --force-remap        Re-run the pre-flight mapper even if map/structure.md exists
+  --research <type>    Enable Research agent (ux|web|accessibility|performance|competitor|security)
   --dry-run            Print the plan without executing agents
   --verbose            Stream agent output to stdout
+  --trace              Print heartbeat lines during long agent calls
+  --maturity <mode>    Override project maturity: "prototype" or "stable"
   -h, --help
 ```
 
@@ -110,10 +157,10 @@ CLI flags override `.wiki4llm.json`, which overrides built-in defaults.
 
 Never stored in config files. Set in the shell before running `wiki4llm run`.
 
-| Variable | Backend |
+| Variable | Provider |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude |
-| `OPENAI_API_KEY` | OpenAI (and llama.cpp local servers) |
-| `GEMINI_API_KEY` | Gemini |
-| `OPENAI_BASE_URL` | llama.cpp / any OpenAI-compatible local server |
-| `OLLAMA_HOST` | Ollama (default: `http://localhost:11434`) |
+| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
+| `OLLAMA_CLOUD_URL` | Ollama cloud endpoint (optional) |
+| `OLLAMA_CLOUD_MODEL` | Ollama cloud model name (optional) |
+| `OLLAMA_CLOUD_API_KEY` | Ollama cloud API key (optional) |
+| `TAVILY_API_KEY` | Tavily web search (Research agent) |

@@ -3,6 +3,12 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 
+def validate_vault(vault_path: str):
+    root = Path(vault_path).resolve()
+    for d in ["raw/assets", "map", "entities", "decisions", "pending", "research"]:
+        (root / d).mkdir(parents=True, exist_ok=True)
+
+
 def read_vault_slice(vault_path: str, files: list) -> str:
     parts = []
     for f in files:
