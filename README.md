@@ -11,6 +11,7 @@ Think of it as a replacement for RAG in agentic coding workflows: the vault is b
 ## Contents
 
 - [How it works](#how-it-works)
+- [Memory Model](#memory-model)
 - [Three Modes](#three-modes)
 - [Getting Started](#getting-started)
 - [Walkthroughs](#walkthroughs)
@@ -35,6 +36,19 @@ You run `wiki4llm init` once per project. It:
 4. Writes `.wiki4llm.json`
 
 After that, Context and Harness modes run entirely inside your LLM CLI tool via slash-commands — the binary is done. Run Mode is different: `wiki4llm run` is an ongoing runtime command that drives the full build loop from the CLI, because it needs to manage context resets between agents — something a slash-command inside a single session can't do. The agent reads the vault, does the work, and writes back. The vault compounds over time.
+
+---
+
+## Memory Model
+
+The vault implements all four types of AI agent memory:
+
+| Memory Type | Human Analogy | wiki4llm Implementation |
+|---|---|---|
+| **Working Memory** | Short-term / RAM | Context window — vault preamble injected per command (last log entries, index, latest episode, skills index) |
+| **Semantic Memory** | Factual knowledge | `entities/`, `map/`, `decisions/`, `overview.md` — the knowledge graph of your codebase |
+| **Procedural Memory** | Learned skills | `skills/` — reusable patterns and techniques; agent sees the index, pulls in individual skills only when relevant |
+| **Episodic Memory** | Personal experience | `episodes/` — compressed session summaries; "what did we do last time?" |
 
 ---
 
@@ -97,6 +111,11 @@ Best for day-to-day work on an existing or new project where you want to stay in
 ```
 
 That's the loop: map once, advise freely, build, update. Every command reads the vault first, so the agent always has context.
+
+```
+# 5. End-of-session: compress what happened into episodic memory + extract skills
+/wiki-reflect
+```
 
 ---
 
@@ -226,6 +245,7 @@ The loop runs until `pending/plan.md` is fully checked off:
 [Verifier]   runs test suite, maps failures to acceptance criteria, writes pending/verify-<slug>.md
              → if tests fail, Builder retries (up to verifierRetries times)
 [Mapper]     updates vault, fills raw/<slug>/TECH.md deviations, checks off feature in pending/plan.md
+             → writes episodes/<date>-<slug>.md (episodic memory)
              → repeat for next feature
 ```
 
@@ -398,6 +418,7 @@ The harness reads your specs, builds a feature plan, and works through it autono
 | `/wiki-build [--feature "..."] [--ask]` | Read vault, then plan and implement a feature |
 | `/wiki-update [--ask]` | Incrementally update vault from `git diff` since last map |
 | `/wiki-lint` | Health-check the vault (orphans, stale claims, missing pages) |
+| `/wiki-reflect` | End-of-session: compress session into episodic memory + extract reusable skills |
 
 ### Harness Mode
 
@@ -459,6 +480,10 @@ The agent owns all vault writes. You read it.
     <ComponentName>.md  # one page per major module/class/service
   decisions/
     <slug>.md           # ADR-style architectural decision pages
+  skills/
+    <skill-name>.md     # reusable patterns/techniques (procedural memory)
+  episodes/
+    <date>-<slug>.md    # compressed session summaries (episodic memory)
   research/
     <slug>.md           # Research agent findings (Run Mode, when research is enabled)
   pending/
@@ -469,6 +494,19 @@ The agent owns all vault writes. You read it.
 ```
 
 The vault is a plain git repo of markdown files. Obsidian is optional — everything works headlessly without it.
+
+### Memory loading strategy
+
+Every slash-command reads the vault preamble before executing. The preamble loads:
+
+1. **Working memory** — last 5 log entries + git diff stat (what's happening right now)
+2. **Semantic memory** — full `index.md` (the knowledge graph index)
+3. **Episodic memory** — the most recent `episodes/` file (what happened last session)
+4. **Procedural memory** — the file list in `skills/` (index only; individual skills are pulled in on-demand when relevant to the task)
+
+This keeps the context window lean while giving the agent access to all four memory types. Skills are loaded lazily — the agent sees what's available and reads only what it needs.
+
+**Run Mode** uses the same model. The BAML harness builds a memory preamble (log tail + latest episode + skills index) and injects it into the Architect and Builder before each call. After each feature completes, the harness automatically writes a compressed episode to `episodes/<date>-<slug>.md` — so the next feature's agents always know what just happened, even across context resets.
 
 ---
 
@@ -660,6 +698,7 @@ Some commands benefit from specific model strengths:
 | `/wiki-advise` | Strong reasoning; frontier models or 70B+ recommended |
 | `/wiki-build` | Code generation; code-tuned models (Qwen2.5-Coder, DeepSeek-Coder, Codestral) |
 | `/wiki-lint` | Analytical; any well-instruction-tuned model works |
+| `/wiki-reflect` | Strong summarization; frontier models or 32B+ recommended |
 | `/wiki-run` (Harness) | Each agent can use a different model — mix and match by task |
 
 ### Local Model Recommendations
@@ -714,6 +753,7 @@ npm run dev -- init
 | 3 — Maintenance & Sync | `/wiki-update`, `/wiki-lint`, push/pull sync |
 | 4 — Harness Mode | `/wiki-run`, specialist agents, grey area queue, external vault |
 | 5 — Run Mode | `wiki4llm run`, BAML agent loop, Planner/Refiner/Architect/Builder/Mapper, idempotent loop |
+| 6 — Memory Model | `/wiki-reflect`, episodic memory (`episodes/`), procedural memory (`skills/`), memory-aware preamble |
 
 Out of scope for v1: embedding/vector search, confidence scoring, multi-agent mesh sync, web UI.
 # wiki4llm

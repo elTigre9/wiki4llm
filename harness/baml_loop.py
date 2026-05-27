@@ -43,7 +43,10 @@ from loop_helpers import (
 from vault import (
     append_log,
     check_off_feature,
+    latest_episode,
+    log_tail,
     next_unchecked_feature,
+    skills_index,
     validate_vault,
     write_vault_file,
 )
@@ -250,6 +253,48 @@ def _preload_vault_context(vault_path: str, files: list[str]) -> str:
         if content:
             parts.append(f"### {f}\n{content}")
     return "\n\n".join(parts) if parts else "(no vault context available)"
+
+
+def _build_memory_preamble(vault_path: str) -> str:
+    """Build the working memory preamble: log tail + latest episode + skills index.
+
+    Injected into tool-using agents (Builder, Mapper) so they have session
+    continuity without loading the entire vault.
+    """
+    parts = []
+    tail = log_tail(vault_path)
+    if tail:
+        parts.append(f"### Recent log entries\n{tail}")
+    episode = latest_episode(vault_path)
+    if episode:
+        parts.append(f"### Last session (episodic memory)\n{episode}")
+    skills = skills_index(vault_path)
+    if skills:
+        parts.append(f"### Available skills (read individually if relevant)\n{skills}")
+    return "\n\n".join(parts) if parts else ""
+
+
+def _write_episode(vault_path: str, slug: str, description: str, actions: list[str]) -> None:
+    """Write a compressed episode after a feature is completed."""
+    ts = datetime.now(timezone.utc)
+    date_str = ts.strftime("%Y-%m-%d")
+    content = f"""---
+tags: [episode]
+updated: {ts.isoformat()}
+---
+
+# {description}
+
+## Context
+Feature `{slug}` was built as part of the automated run loop.
+
+## Actions taken
+{chr(10).join(f'- {a}' for a in actions)}
+
+## Outcome
+Feature completed and checked off in pending/plan.md.
+"""
+    write_vault_file(vault_path, f"episodes/{date_str}-{slug}.md", content)
 
 
 # ---------------------------------------------------------------------------
@@ -555,9 +600,10 @@ def run_loop_baml(config: HarnessConfig) -> int:
                     if not config.no_refine else None
                 )
                 research = vault_file_content(config.vault_path, f"research/{slug}.md") or None
+                memory_preamble = _build_memory_preamble(config.vault_path)
                 result = invoke_architect(
                     description, slug, vault_structure, vault_entrypoints,
-                    criteria, decision_text, research, config,
+                    criteria, decision_text, research, memory_preamble, config,
                 )
                 _write_tech_plan(config.vault_path, slug, result)
                 append_log(config.vault_path, "architect", slug,
@@ -575,8 +621,10 @@ def run_loop_baml(config: HarnessConfig) -> int:
                         decision_text = vault_file_content(
                             config.vault_path, f"decisions/{slug}.md"
                         ) or None
+                        memory_preamble = _build_memory_preamble(config.vault_path)
                         result = invoke_builder(
-                            tech_plan, decision_text, slug, description, config,
+                            tech_plan, decision_text, slug, description,
+                            memory_preamble, config,
                         )
                         _write_builder_questions(config.vault_path, slug, result)
                         if result.commit_made or not config.verbose:
@@ -655,6 +703,17 @@ def run_loop_baml(config: HarnessConfig) -> int:
                         check_off_feature(str(plan_path), slug)
                     append_log(config.vault_path, "mapper", slug,
                                f"Vault updated. Feature {slug} marked complete.")
+
+            # Episodic memory — write a compressed episode for this feature
+            actions = []
+            if not config.no_refine:
+                actions.append(f"Evaluated approaches in decisions/{slug}.md")
+            actions.append(f"Planned implementation in pending/plan-{slug}.md")
+            actions.append(f"Built and committed feature code")
+            if not config.no_verify:
+                actions.append(f"Verified with test suite")
+            actions.append(f"Mapped changes into vault")
+            _write_episode(config.vault_path, slug, description, actions)
 
         except (HarnessError, Exception) as e:
             import traceback

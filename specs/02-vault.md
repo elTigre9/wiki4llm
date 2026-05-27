@@ -22,6 +22,10 @@ The vault is a directory of plain markdown files at `.wiki/` inside the project 
     <ComponentName>.md  # one page per major module/class/service
   decisions/
     <slug>.md           # ADR-style pages written by the Refiner
+  skills/
+    <skill-name>.md     # reusable patterns/techniques (procedural memory)
+  episodes/
+    <date>-<slug>.md    # compressed session summaries (episodic memory)
   pending/
     plan.md             # feature checklist (Run Mode)
     plan-<slug>.md      # per-feature implementation plan (Architect output)

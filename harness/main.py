@@ -44,7 +44,10 @@ def main():
     if not config.no_verify:
         agents.append("verifier")
     agents.append("mapper")
-    print("  Agents:  " + "  ".join(f"{a}={config.model_for(a)}" for a in agents) + "\n")
+    print("  Agents:  " + "  ".join(
+        f"{a}={models[0]}" + (f" (+{len(models) - 1} fallback)" if len(models) > 1 else "")
+        for a in agents if (models := config.fallbacks_for(a))
+    ) + "\n")
 
     from baml_loop import run_loop_baml
     sys.exit(run_loop_baml(config))

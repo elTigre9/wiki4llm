@@ -114,6 +114,25 @@ class HarnessConfig:
     def model_for(self, agent: str) -> str:
         return self.agent_models.get(agent, self.default_model)
 
+    def fallbacks_for(self, agent: str) -> list[str]:
+        """Return the ordered list of models to try for an agent.
+
+        Config format supports both:
+          "builder": "ollama/qwen2.5-coder:32b"
+          "builder": ["ollama/qwen2.5-coder:32b", "openai/gpt-4o"]
+
+        In both cases the default_model is prepended if not already present.
+        """
+        raw = self.agent_models.get(agent, self.default_model)
+        if isinstance(raw, list):
+            models = [str(m) for m in raw]
+        else:
+            models = [str(raw)]
+        if self.default_model and self.default_model not in models:
+            models.insert(0, self.default_model)
+        seen = []
+        return [m for m in models if not (m in seen or seen.append(m))]
+
     def inject_api_keys(self) -> None:
         """Set provider API keys as env vars. Values starting with '$' are treated as env var references."""
         for provider, value in self.api_keys.items():

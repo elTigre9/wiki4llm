@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 def validate_vault(vault_path: str):
     root = Path(vault_path).resolve()
-    for d in ["raw/assets", "map", "entities", "decisions", "pending", "research"]:
+    for d in ["raw/assets", "map", "entities", "decisions", "pending", "research", "skills", "episodes"]:
         (root / d).mkdir(parents=True, exist_ok=True)
 
 
@@ -16,6 +16,40 @@ def read_vault_slice(vault_path: str, files: list) -> str:
         if full.exists():
             parts.append(f"### {f}\n{full.read_text()}")
     return "\n\n".join(parts)
+
+
+def latest_episode(vault_path: str) -> str:
+    """Return the content of the most recent episode file, or empty string."""
+    episodes_dir = Path(vault_path) / "episodes"
+    if not episodes_dir.exists():
+        return ""
+    files = sorted(episodes_dir.glob("*.md"), reverse=True)
+    return files[0].read_text() if files else ""
+
+
+def skills_index(vault_path: str) -> str:
+    """Return a newline-separated list of skill filenames (index only, not content)."""
+    skills_dir = Path(vault_path) / "skills"
+    if not skills_dir.exists():
+        return ""
+    files = sorted(skills_dir.glob("*.md"))
+    return "\n".join(f"- {f.stem}" for f in files) if files else ""
+
+
+def read_skill(vault_path: str, skill_name: str) -> str:
+    """Read a specific skill file by name (without .md extension)."""
+    full = Path(vault_path) / "skills" / f"{skill_name}.md"
+    return full.read_text() if full.exists() else ""
+
+
+def log_tail(vault_path: str, n: int = 5) -> str:
+    """Return the last n log entries from log.md."""
+    log_path = Path(vault_path) / "log.md"
+    if not log_path.exists():
+        return ""
+    lines = log_path.read_text().splitlines()
+    entries = [l for l in lines if l.startswith("## ")]
+    return "\n".join(entries[-n:])
 
 
 def write_vault_file(vault_path: str, relative_path: str, content: str, append=False):

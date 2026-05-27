@@ -13,6 +13,8 @@ function preambleInstruction(vaultPath: string): string {
   return `Before doing anything else, read the current vault state:
 - Last 5 entries in \`${vaultPath}/log.md\`
 - All entries in \`${vaultPath}/index.md\`
+- The most recent file in \`${vaultPath}/episodes/\` (latest compressed session — episodic memory)
+- The file list in \`${vaultPath}/skills/\` (procedural memory index — read individual skill files only when relevant to the current task)
 - Run \`git diff --stat HEAD\` inside \`${vaultPath}\` to see uncommitted changes
 
 Use this context to orient yourself before executing the task below.
@@ -134,6 +136,71 @@ function updateCommand(tool: Tool, cfg: Config, vaultPath: string): string {
 7. Run \`git add . && git commit -m "wiki4llm: update <N> files"\` inside \`${vaultPath}\`.
 
 If \`--ask\` was passed: note any new ambiguities, contradictions, or stale claims found while updating.
+`;
+}
+
+function reflectCommand(tool: Tool, cfg: Config, vaultPath: string): string {
+  const fm = frontmatter(tool, "wiki:reflect", "Compress this session into episodic memory and extract reusable skills");
+  const preamble = preambleInstruction(vaultPath);
+  return `${fm}${preamble}# Task: Session Reflection (Episodic + Procedural Memory)
+
+## Instructions
+
+### Episodic Memory — compress this session
+
+Write \`${vaultPath}/episodes/<YYYY-MM-DD>-<slug>.md\` summarizing this session:
+
+\`\`\`markdown
+---
+tags: [episode]
+updated: <ISO 8601>
+---
+
+# <one-line summary of what happened>
+
+## Context
+<what was the goal, what state was the project in>
+
+## Actions taken
+<bullet list of key actions, not a full replay>
+
+## Outcome
+<what was achieved, what changed>
+
+## Lessons
+<what worked, what didn't, what to do differently next time>
+\`\`\`
+
+### Procedural Memory — extract reusable skills
+
+If this session revealed a reusable pattern, technique, or workflow that would help future sessions, write or update a skill file at \`${vaultPath}/skills/<skill-name>.md\`:
+
+\`\`\`markdown
+---
+tags: [skill]
+updated: <ISO 8601>
+---
+
+# <skill name>
+
+## When to use
+<trigger conditions>
+
+## Steps
+<numbered procedure>
+
+## Gotchas
+<common mistakes or edge cases>
+\`\`\`
+
+Only create a skill if the pattern is genuinely reusable. Not every session produces one.
+
+### Finalize
+
+1. Update \`${vaultPath}/index.md\` with entries for any new pages.
+2. Append to \`${vaultPath}/log.md\`:
+   \`## [<timestamp>] reflect | ${cfg.project.name} | commit:<git-hash>\`
+3. Run \`git add . && git commit -m "wiki4llm: reflect"\` inside \`${vaultPath}\`.
 `;
 }
 
@@ -350,6 +417,7 @@ export function commandFiles(cfg: Config, vaultPath: string): Record<string, str
     "wiki-build.md": buildCommand(tool, cfg, vaultPath),
     "wiki-update.md": updateCommand(tool, cfg, vaultPath),
     "wiki-lint.md": lintCommand(tool, cfg, vaultPath),
+    "wiki-reflect.md": reflectCommand(tool, cfg, vaultPath),
   };
 
   const harness: Record<string, string> = {

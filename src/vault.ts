@@ -3,7 +3,7 @@ import path from "path";
 import { execSync } from "child_process";
 
 export function scaffoldVault(vaultPath: string, initGit: boolean): void {
-  const dirs = ["raw/assets", "map", "entities", "decisions", "pending"];
+  const dirs = ["raw/assets", "map", "entities", "decisions", "pending", "skills", "episodes"];
   for (const d of dirs) fs.mkdirSync(path.join(vaultPath, d), { recursive: true });
 
   const now = new Date().toISOString();
